@@ -21,7 +21,6 @@ No rules are programmed — the agent learns by **reward and punishment**.
 ML_Project/
 🔺️ environment/               
 🔺️ 🔺 flappy_bird_game.py       # The game logic with Pygame
-🔺️ 🔺 game_utils.py             # Helper functions (optional)
 🔺️ preprocessing/
 🔺️ 🔺 preprocess.py             # Convert raw images for the agent
 🔺️ agent/
