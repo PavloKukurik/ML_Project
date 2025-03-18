@@ -16,7 +16,7 @@ RED = (200, 0, 0)
 # Ініціалізація
 pygame.init()
 screen = pygame.display.set_mode((WIN_WIDTH, WIN_HEIGHT))
-pygame.display.set_caption("Flappy Bird - Покращена фізика")
+pygame.display.set_caption("Flappy Bird")
 clock = pygame.time.Clock()
 
 # Параметри пташки
@@ -32,7 +32,7 @@ class Bird:
         self.width = 34
         self.height = 24
         self.velocity = 0
-        self.color = GREEN  # Тестовий колір
+        self.color = GREEN
 
     def update(self):
         # Прискорення вниз через гравітацію
