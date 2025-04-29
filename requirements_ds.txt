@@ -1,0 +1,13 @@
+pandas
+numpy
+scikit-learn
+xgboost
+prophet
+matplotlib
+seaborn
+pyarrow
+openpyxl
+jupyter
+selenium
+webdriver-manager
+python-dotenv
