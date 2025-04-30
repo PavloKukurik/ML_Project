@@ -51,13 +51,13 @@ def main():
 
     # daily 5-хв
     daily = load_and_clean(RAW_DAILY, "timestamp")
-    daily.to_parquet(OUT_DIR / "clean_daily.parquet", index=False)
+    daily.to_csv(OUT_DIR / "clean_daily.csv", index=False)
 
     # monthly (агрегати)
     monthly = pd.read_csv(RAW_MONTH, dtype_backend="pyarrow")
     monthly = monthly.rename(columns={"Time": "date"})
     monthly["date"] = pd.to_datetime(monthly["date"]).dt.date
-    monthly.to_parquet(OUT_DIR / "clean_monthly.parquet", index=False)
+    monthly.to_csv(OUT_DIR / "clean_monthly.csv", index=False)
 
 if __name__ == "__main__":
     main()

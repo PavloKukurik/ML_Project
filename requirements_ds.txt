@@ -11,3 +11,4 @@ jupyter
 selenium
 webdriver-manager
 python-dotenv
+optuna
