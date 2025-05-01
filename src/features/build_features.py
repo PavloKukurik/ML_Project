@@ -1,119 +1,123 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
-build_features.py
------------------
-• Зчитує clean_daily.csv
-• Додає:   – часові фічі  (hour_sin/cos, dow, weekend)
-           – лагові       (60 і 180 хв для ключових колонок)
-           – ролінгові    (mean / std на 60 і 180 хв)
-           – погодні      (temperature, irradiance …) якщо доступні JSON у data/external
-• Зберігає features_daily.csv у ../../data/processed
+build_features.py  (v2 – з погодою CSV)
+---------------------------------------
+• Зчитує clean_daily.csv  (5-хв телеметрія)
+• Додає часові, лагові, ролінгові фічі
+• Підтягує погоду з processed_weather_2025.csv
+• Зберігає features_daily.csv  у ../../data/processed
 """
 
 from pathlib import Path
-import glob
+import sys
 import pandas as pd
 import numpy as np
 
-# --------- шляхи -------------------------------------------------------------
-DATA_DIR      = Path("../../data/processed")
-CLEAN_CSV     = DATA_DIR / "clean_daily.csv"
-WEATHER_DIR   = Path("../../data/external")
-OUT_FILE      = DATA_DIR / "features_daily.csv"
+# ───── ШЛЯХИ ────────────────────────────────────────────────────────────────
+DATA_DIR    = Path("../../data/processed")
+CLEAN_CSV   = DATA_DIR / "clean_daily.csv"
+WEATHER_CSV = Path("../../data/external/processed_weather_2025.csv")
+OUT_CSV     = DATA_DIR / "features_daily.csv"
 
-# --------- параметри фіч -----------------------------------------------------
-LAG_MINUTES   = [60, 180]     # 1 год, 3 год
-ROLL_WINDOWS  = [60, 180]     # хвилини
-KEY_COLS      = ["pv_kw", "load_kw", "soc_pct"]
+# ───── ПАРАМЕТРИ ФІЧ ────────────────────────────────────────────────────────
+LAG_MIN    = [60, 180]    # хвилини для лагів
+ROLL_MIN   = [60, 180]    # хвилини для ролінгів
+KEY_COLS   = ["pv_kw", "load_kw", "soc_pct"]
 
-# -----------------------------------------------------------------------------
+WEATHER_KEEP = [
+    "temperature_2m",
+    "relative_humidity_2m",
+    "cloud_cover",
+    "shortwave_radiation",
+    "precipitation_probability",
+    "wind_speed_10m",
+    "weather_code",
+]
 
+# ───── ФУНКЦІЇ ───────────────────────────────────────────────────────────────
 
 def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
     ts = df["timestamp"]
     df["hour"]       = ts.dt.hour
     df["hour_sin"]   = np.sin(2 * np.pi * df["hour"] / 24)
     df["hour_cos"]   = np.cos(2 * np.pi * df["hour"] / 24)
-    df["dow"]        = ts.dt.dayofweek               # Monday=0
-    df["is_weekend"] = (df["dow"] >= 5).astype("int")
+    df["dow"]        = ts.dt.dayofweek
+    df["is_weekend"] = (df["dow"] >= 5).astype("int8")
     return df
 
-
-def add_lag_features(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
-    steps = minutes // 5                               # 5-хв інтервал
-    for col in KEY_COLS:
-        df[f"{col}_lag_{minutes}m"] = df[col].shift(steps)
+def add_lag(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
+    steps = minutes // 5
+    for c in KEY_COLS:
+        df[f"{c}_lag_{minutes}m"] = df[c].shift(steps)
     return df
 
-
-def add_roll_features(df: pd.DataFrame, window_min: int) -> pd.DataFrame:
-    win = window_min // 5
-    for col in KEY_COLS:
-        df[f"{col}_roll{window_min}m_mean"] = df[col].rolling(win).mean()
-        df[f"{col}_roll{window_min}m_std"]  = df[col].rolling(win).std()
+def add_roll(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
+    window = minutes // 5
+    for c in KEY_COLS:
+        df[f"{c}_roll{minutes}m_mean"] = df[c].rolling(window).mean()
+        df[f"{c}_roll{minutes}m_std"]  = df[c].rolling(window).std()
     return df
 
+def load_weather(path: Path) -> pd.DataFrame | None:
+    if not path.exists():
+        print("⚠️  Weather CSV not found – без погодних фіч.")
+        return None
+    w = pd.read_csv(path, parse_dates=["time"])
+    w = w.rename(columns={"time": "timestamp"})
+    # локалізуємо час
+    w["timestamp"] = pd.to_datetime(w["timestamp"], errors="coerce", utc=True)
+    w["timestamp"] = w["timestamp"].dt.tz_convert("Europe/Kyiv")
+    keep = [c for c in WEATHER_KEEP if c in w.columns]
+    w = w[["timestamp", *keep]].sort_values("timestamp")
+    return w
 
-def merge_weather(df: pd.DataFrame) -> pd.DataFrame:
-    files = sorted(glob.glob(str(WEATHER_DIR / "weather_*.json")))
-    if not files:
-        print("⚠️  Weather JSON not found — фічі погоди пропущені.")
-        return df
-
-    w = (
-        pd.concat([pd.read_json(f) for f in files], ignore_index=True)
-          .rename(columns={"temp": "temperature"})
-    )
-    w["timestamp"] = pd.to_datetime(w["timestamp"], utc=True).dt.tz_convert("Europe/Kyiv")
-    w = w.sort_values("timestamp")
-
-    # найближчий запис погоди до кожної 5-хв мітки (tolerance 30 хв)
-    df = pd.merge_asof(
+def merge_weather(df: pd.DataFrame, weather: pd.DataFrame) -> pd.DataFrame:
+    # перед merge_asof видаляємо будь-які NaT у df.timestamp
+    df = df.dropna(subset=["timestamp"])
+    return pd.merge_asof(
         df.sort_values("timestamp"),
-        w.sort_values("timestamp"),
+        weather.sort_values("timestamp"),
         on="timestamp",
         direction="nearest",
         tolerance=pd.Timedelta("30m"),
     )
-    return df
 
+# ───── ГОЛОВНА ЛОГІКА ───────────────────────────────────────────────────────
 
 def main() -> None:
     if not CLEAN_CSV.exists():
-        raise FileNotFoundError(
-            f"{CLEAN_CSV} not found — спочатку запустіть preprocessing."
-        )
+        sys.exit(f"❌ {CLEAN_CSV} not found – спочатку запустіть preprocessing.py")
 
-    # ----- завантаження з явним парсингом дати --------------------------------
+    # 1) Завантажуємо clean_daily
     df = pd.read_csv(CLEAN_CSV)
-    df.rename(columns=lambda c: c.strip(), inplace=True)          # прибрати зайві пробіли
     df["timestamp"] = (
         pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
           .dt.tz_convert("Europe/Kyiv")
     )
+    # Видаляємо рядки з невірними часами
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
-    # ----- генерація фіч ------------------------------------------------------
+    # 2) Додаємо часові, лагові, ролінгові фічі
     df = add_time_features(df)
+    for m in LAG_MIN:
+        df = add_lag(df, m)
+    for m in ROLL_MIN:
+        df = add_roll(df, m)
 
-    for m in LAG_MINUTES:
-        df = add_lag_features(df, m)
+    # 3) Мержимо погоду
+    weather_df = load_weather(WEATHER_CSV)
+    if weather_df is not None:
+        df = merge_weather(df, weather_df)
 
-    for w in ROLL_WINDOWS:
-        df = add_roll_features(df, w)
-
-    df = merge_weather(df)
-
-    # Відкидаємо перші max(ROLL) рядків із NaN після ролінга
-    drop_n = max(ROLL_WINDOWS) // 5
+    # 4) Обрізаємо початкові NaN від ролінгів
+    drop_n = max(ROLL_MIN) // 5
     df = df.iloc[drop_n:].reset_index(drop=True)
 
-    # ----- збереження ---------------------------------------------------------
-    OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(OUT_FILE, index=False)
-    print(f"✅  Features saved → {OUT_FILE}   ({df.shape[0]:,} rows, {df.shape[1]} cols)")
-
+    # 5) Зберігаємо результати
+    OUT_CSV.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(OUT_CSV, index=False)
+    print(f"✅  Features saved → {OUT_CSV}   ({df.shape[0]:,} rows, {df.shape[1]} cols)")
 
 if __name__ == "__main__":
     main()
