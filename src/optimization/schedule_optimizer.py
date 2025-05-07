@@ -3,89 +3,89 @@
 """
 schedule_optimizer.py
 ---------------------
-Перебирає t_switch, автоматично дістає pocх_start із попередньої симуляції або з аргументу.
+Пошук optimal t_night вночі (00–05:00, крок 15 хв),
+t_evening фіксуємо як закінчення дня або теж ітеруємо.
 """
 
 from pathlib import Path
 import argparse, sys
 import pandas as pd
+from datetime import timedelta
 
 def load_predictions(path: Path) -> pd.DataFrame:
-    if not path.exists(): sys.exit(f"❌ File not found: {path}")
     ext = path.suffix.lower()
-    try:
-        df = pd.read_parquet(path) if ext in (".parquet"," .pq") else pd.read_csv(path, parse_dates=["timestamp"])
-    except:
+    if ext in (".parquet", ".pq"):
         df = pd.read_parquet(path)
+    else:
+        try:
+            df = pd.read_csv(path, parse_dates=["timestamp"])
+        except:
+            df = pd.read_parquet(path)
     df = df.rename(columns=lambda c: c.strip())
-    if "pv_kw_pred" in df and "load_kw_pred" in df:
+    if "pv_kw_pred" in df.columns:
         df = df.rename(columns={"pv_kw_pred":"pv_kw","load_kw_pred":"load_kw"})
-    if not {"timestamp","pv_kw","load_kw"}.issubset(df.columns):
-        sys.exit("❌ predictions must include timestamp, pv_kw, load_kw")
-    return df.sort_values("timestamp")
+    return df.sort_values("timestamp")[["timestamp","pv_kw","load_kw"]]
 
-def get_initial_soc(args) -> float:
-    if args.prev_sim:
-        df = pd.read_csv(args.prev_sim)
-        soc = df["soc_pct"].iloc[-1]
-        print(f"ℹ️  Initial SOC loaded from {Path(args.prev_sim).name}: {soc:.1f}%")
-        return soc
-    soc0 = args.soc_start
-    return soc0*100 if soc0 <= 1 else soc0
-
-def simulate_soc(df, soc0, t_switch_hour):
-    BAT, ηc, ηd = 5.0, 0.95, 0.90
-    SOC_MIN, SOC_MAX = 10, 95
-    soc = soc0
-    total_import = 0.0
+def simulate_soc(df, t_night, t_evening):
+    # скопійований блок із battery_simulator
+    from battery_simulator import BAT_CAP_KWH, ETA_CHARGE, ETA_DISCHARGE, SOC_MIN, SOC_MAX
+    soc = SOC_MAX
+    total_imp = 0
     for _, r in df.iterrows():
         h, pv, load = r.timestamp.hour, r.pv_kw, r.load_kw
-        if h < t_switch_hour:
-            diff = -load
-            soc += diff * ηd * 100 / BAT
-            imp = 0.0
-        else:
-            diff = pv - load
-            if diff >= 0:
-                soc += diff * ηc * 100 / BAT
-                imp = 0.0
+        if h < t_night:
+            p_batt = -load; imp = 0; soc += p_batt*ETA_DISCHARGE*100/BAT_CAP_KWH
+        elif h < t_evening:
+            diff = pv-load
+            if diff>=0:
+                p_batt=diff; imp=0; soc+=diff*ETA_CHARGE*100/BAT_CAP_KWH
             else:
-                soc += 0
-                imp = -diff
+                p_batt=0;  imp=-diff
+        else:
+            needed_pct = SOC_MAX - soc
+            needed_kwh = max(0, needed_pct*BAT_CAP_KWH/100)
+            p_batt = needed_kwh
+            imp    = load + needed_kwh/ETA_CHARGE
+            soc += needed_kwh*100/BAT_CAP_KWH
+
         soc = min(max(soc, SOC_MIN), SOC_MAX)
-        total_import += imp
-    return soc, total_import
+        total_imp += imp
+    return soc, total_imp
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--pred",       required=True)
-    p.add_argument("--soc_start",  type=float, default=0.8)
-    p.add_argument("--prev_sim",   help="path to previous _soc_sim.csv")
+    p.add_argument("--pred",       required=True, help="predictions (.csv/.parquet)")
     p.add_argument("--start_hour", type=int, default=0)
     p.add_argument("--end_hour",   type=int, default=5)
     p.add_argument("--step_min",   type=int, default=15)
-    p.add_argument("--objective",  choices=["min_import","max_soc"], default="min_import")
+    p.add_argument("--evening",    help="HH:MM — фіксований вечірній switch")
     args = p.parse_args()
 
     df = load_predictions(Path(args.pred))
-    soc0 = get_initial_soc(args)
+    # визначимо t_evening
+    if args.evening:
+        te = int(args.evening.split(":")[0])
+    else:
+        # беремо останній індекс з timestamp як вечір (приблизно sunset)
+        te = df["timestamp"].dt.hour.max()
 
     best = None
-    times = [(h, m) for h in range(args.start_hour, args.end_hour)
-                    for m in range(0, 60, args.step_min)]
-    for h, m in times:
-        final_soc, imp = simulate_soc(df, soc0, h)
-        if best is None or (
-            args.objective=="min_import" and imp < best[2]
-        ) or (
-            args.objective=="max_soc" and final_soc > best[1]
-        ):
-            best = ((h, m), final_soc, imp)
+    # генеруємо кандидатні t_night
+    times = []
+    for h in range(args.start_hour, args.end_hour):
+        for m in range(0,60,args.step_min):
+            times.append((h, m))
+    for h,m in times:
+        soc, imp = simulate_soc(df, h, te)
+        if best is None or imp < best[2]:
+            best = ((h,m), soc, imp)
 
-    (h_opt,m_opt), soc_opt, imp_opt = best
-    print(f"⏱ Optimal t_switch = {h_opt:02d}:{m_opt:02d}")
-    print(f"🔋 Final SOC       = {soc_opt:.1f}%")
-    print(f"🌐 Total import    = {imp_opt:.2f} kWh")
+    (hn, mn), soc_best, imp_best = best
+    tn = f"{hn:02d}:{mn:02d}"
+    print(f"⏱ Optimal t_night = {tn}")
+    print(f"🌇 Evening switch = {te:02d}:00")
+    print(f"🔋 Final SOC = {soc_best:.1f}%")
+    print(f"🌐 Total import = {imp_best:.2f} kWh")
 
 if __name__=="__main__":
     main()

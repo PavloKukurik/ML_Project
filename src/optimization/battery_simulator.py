@@ -3,117 +3,101 @@
 """
 battery_simulator.py
 --------------------
-Імітує поведінку АКБ за годинним прогнозом pv/load.
-Підтримує CSV та Parquet.
-Може брати початковий SoC із попереднього результату.
+Імітує роботу АКБ з двома перемиканнями:
+  1) t_night   — перемикання на батарею вночі
+  2) t_evening — повернення на мережу ввечері із дозаправкою до 100%
+
+Підтримує .csv та .parquet для прогнозу.
 """
 
 from pathlib import Path
 import argparse, sys
 import pandas as pd
 
-# ── Параметри АКБ ─────────────────────────────────────────────────────────────
-BAT_CAP_KWH   = 5.0     # ємність АКБ у кВт·год
-ETA_CHARGE    = 0.95    # ККД заряджання
-ETA_DISCHARGE = 0.90    # ККД розряджання
-SOC_MIN, SOC_MAX = 10, 95  # [%]
-# ──────────────────────────────────────────────────────────────────────────────
-
+# Параметри АКБ
+BAT_CAP_KWH   = 5.0     # kWh
+ETA_CHARGE    = 0.95
+ETA_DISCHARGE = 0.90
+SOC_MIN, SOC_MAX = 10, 95  # відсотки
 
 def load_predictions(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        sys.exit(f"❌ Файл не знайдено: {path}")
     ext = path.suffix.lower()
-    try:
-        if ext in (".parquet", ".pq"):
-            df = pd.read_parquet(path)
-        else:
-            df = pd.read_csv(path, parse_dates=["timestamp"])
-    except (UnicodeDecodeError, pd.errors.ParserError):
+    if ext in (".parquet", ".pq"):
         df = pd.read_parquet(path)
+    else:
+        try:
+            df = pd.read_csv(path, parse_dates=["timestamp"])
+        except (UnicodeDecodeError, pd.errors.ParserError):
+            df = pd.read_parquet(path)
     df = df.rename(columns=lambda c: c.strip())
-    if "pv_kw_pred" in df and "load_kw_pred" in df:
+    if "pv_kw_pred" in df.columns:
         df = df.rename(columns={"pv_kw_pred":"pv_kw","load_kw_pred":"load_kw"})
     if not {"timestamp","pv_kw","load_kw"}.issubset(df.columns):
-        sys.exit("❌ В прогнозі мають бути колонки timestamp, pv_kw(=_pred), load_kw(=_pred)")
-    return df[["timestamp","pv_kw","load_kw"]].sort_values("timestamp")
+        sys.exit("❌ В прогнозі мають бути колонки timestamp, pv_kw, load_kw")
+    return df.sort_values("timestamp")[["timestamp","pv_kw","load_kw"]]
 
+def simulate_soc(df, t_night:int, t_evening:int) -> pd.DataFrame:
+    soc = SOC_MAX  # стартуємо з 100 %
+    batt_kw, grid_kw, soc_pct = [], [], []
 
-def get_initial_soc(args) -> float:
-    # якщо вказано попередню симуляцію — беремо останній soc_pct
-    if args.prev_sim:
-        ps = Path(args.prev_sim)
-        if not ps.exists():
-            sys.exit(f"❌ Файл попередньої симуляції не знайдено: {ps}")
-        prev = pd.read_csv(ps)
-        soc = prev["soc_pct"].iloc[-1]
-        print(f"ℹ️  Взяли початковий SOC = {soc:.1f}% з {ps.name}")
-        return soc
-    # інакше — беремо з --soc_start
-    soc0 = args.soc_start
-    if soc0 <= 1:
-        soc0 *= 100
-    if not (SOC_MIN <= soc0 <= SOC_MAX):
-        sys.exit(f"❌ soc_start має бути в межах {SOC_MIN}–{SOC_MAX}%")
-    return soc0
+    for _, row in df.iterrows():
+        h, pv, load = row["timestamp"].hour, row["pv_kw"], row["load_kw"]
 
+        # 1) ніч: до t_night — живимося з батареї
+        if h < t_night:
+            p_batt = -load
+            imp    = 0
+            soc   += p_batt * ETA_DISCHARGE * 100 / BAT_CAP_KWH
 
-def simulate_soc(pred: pd.DataFrame, soc0: float, t_switch_hour: int) -> pd.DataFrame:
-    soc_pct = soc0
-    records = []
-    for _, r in pred.iterrows():
-        h, pv, load = r.timestamp.hour, r.pv_kw, r.load_kw
-        if h < t_switch_hour:
-            p_batt   = -load
-            grid_imp = 0.0
-            soc_pct += p_batt * ETA_DISCHARGE * 100 / BAT_CAP_KWH
-        else:
-            diff     = pv - load
+        # 2) день: між t_night та t_evening — PV→споживання, надлишок→батарея
+        elif h < t_evening:
+            diff = pv - load
             if diff >= 0:
-                p_batt   = diff
-                grid_imp = 0.0
-                soc_pct += diff * ETA_CHARGE * 100 / BAT_CAP_KWH
+                p_batt = diff
+                imp    = 0
+                soc   += diff * ETA_CHARGE * 100 / BAT_CAP_KWH
             else:
-                p_batt   = 0.0
-                grid_imp = -diff
-        soc_pct = min(max(soc_pct, SOC_MIN), SOC_MAX)
-        records.append({
-            "timestamp": r.timestamp,
-            "pv_kw":     pv,
-            "load_kw":   load,
-            "batt_kw":   p_batt,
-            "soc_pct":   soc_pct,
-            "grid_import_kw": grid_imp,
-        })
-    return pd.DataFrame(records)
+                p_batt = 0
+                imp    = -diff
 
+        # 3) вечір: від t_evening — живимося з мережі та заряджаємо батарею до 100 %
+        else:
+            needed_pct = SOC_MAX - soc
+            needed_kwh = max(0, needed_pct * BAT_CAP_KWH / 100)
+            p_batt     = needed_kwh
+            imp        = load + needed_kwh / ETA_CHARGE
+            soc       += needed_kwh * 100 / BAT_CAP_KWH
+
+        # обмеження SOC
+        soc = min(max(soc, SOC_MIN), SOC_MAX)
+
+        batt_kw.append(p_batt)
+        grid_kw.append(imp)
+        soc_pct.append(soc)
+
+    out = df.copy()
+    out["batt_kw"]        = batt_kw
+    out["soc_pct"]        = soc_pct
+    out["grid_import_kw"] = grid_kw
+    return out
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--pred",      required=True,
-                   help="path to predictions (.csv or .parquet)")
-    p.add_argument("--t_switch",  required=True,
-                   help="time HH:MM when to switch to battery")
-    p.add_argument("--soc_start", type=float, default=0.8,
-                   help="initial SOC (0–1 or %), ignored if --prev_sim set")
-    p.add_argument("--prev_sim",  help="path to previous _soc_sim.csv to auto-load SOC")
-    args = p.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pred",      required=True, help="path to predictions (.csv/.parquet)")
+    parser.add_argument("--t_night",   required=True, help="HH:MM — нічне перемикання")
+    parser.add_argument("--t_evening", required=True, help="HH:MM — вечірнє перемикання")
+    args = parser.parse_args()
 
-    df_pred = load_predictions(Path(args.pred))
-    soc0     = get_initial_soc(args)
-    t_switch_hour = int(args.t_switch.split(":")[0])
+    df = load_predictions(Path(args.pred))
+    hn = int(args.t_night.split(":")[0])
+    he = int(args.t_evening.split(":")[0])
+    sim = simulate_soc(df, hn, he)
 
-    sim_df = simulate_soc(df_pred, soc0=soc0, t_switch_hour=t_switch_hour)
+    out_path = Path(args.pred).parent / f"{Path(args.pred).stem}_soc_sim.csv"
+    sim.to_csv(out_path, index=False)
+    print(f"✅ Saved → {out_path}")
+    print(f"   Final SOC: {sim['soc_pct'].iloc[-1]:.1f}%")
+    print(f"   Total import: {sim['grid_import_kw'].sum():.2f} kWh")
 
-    out_csv = Path(args.pred).parent / f"{Path(args.pred).stem}_soc_sim.csv"
-    sim_df.to_csv(out_csv, index=False)
-
-    final_soc   = sim_df["soc_pct"].iloc[-1]
-    total_import = sim_df["grid_import_kw"].sum()
-
-    print(f"✅ Simulation saved → {out_csv.name}")
-    print(f"   Final SOC: {final_soc:.1f}%")
-    print(f"   Total import: {total_import:.2f} kWh")
-
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
