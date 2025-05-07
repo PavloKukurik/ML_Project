@@ -1,0 +1,24 @@
+cat > .gitignore <<'EOF'
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+# --- IDE / OS ---
+.vscode/
+.idea/
+.DS_Store
+# --- Data / Artifacts ---
+.cache/
+data/raw/
+data/processed/
+data/weather/
+artifacts/
+*.csv
+*.parquet
+*.xlsx
+*.json
+# --- Notebooks Checkpoints ---
+**/.ipynb_checkpoints/
+EOF
