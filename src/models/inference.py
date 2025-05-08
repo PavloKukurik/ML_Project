@@ -94,7 +94,15 @@ def predict_day(date_str: str) -> pd.DataFrame:
     with open(CONSUMP_PKL, "rb") as f:
         cons_models = pickle.load(f)
     with open(GENER_PKL, "rb") as f:
-        pv_models   = pickle.load(f)
+        pv_models = pickle.load(f)
+
+    # гарантуємо правильну кількість колонок
+    n_expected = cons_models[0].n_features_in_
+    if X.shape[1] < n_expected:
+        pad = np.zeros((X.shape[0], n_expected - X.shape[1]))
+        X = np.hstack([X, pad])
+    elif X.shape[1] > n_expected:
+        X = X[:, :n_expected]
 
     load_pred = np.mean([m.predict(X) for m in cons_models], axis=0)
     pv_pred   = np.mean([m.predict(X) for m in pv_models ], axis=0)
