@@ -85,3 +85,8 @@ daily_fp = OUT_DIR / f"history_daily_{START_DATE}_to_{END_DATE}.csv"
 daily_df.to_csv(daily_fp, index=False)
 
 print(f"[✅] Saved:\n • {hourly_fp}\n • {daily_fp}")
+
+def main():
+    """Щоб import … as main не падав, якщо ви захочете повернути погоду."""
+    pass
+

@@ -12,3 +12,7 @@ selenium
 webdriver-manager
 python-dotenv
 optuna
+python-telegram-bot
+openmeteo-requests
+requests-cache
+retry_requests

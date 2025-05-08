@@ -10,8 +10,8 @@ import pandas as pd
 import numpy as np
 import xgboost as xgb
 
-FEATURES_CSV = Path("../../data/processed/features_daily.csv")
-MODEL_DIR    = Path("../../artifacts/models"); MODEL_DIR.mkdir(parents=True, exist_ok=True)
+FEATURES_CSV = Path("data/processed/features_daily.csv")
+MODEL_DIR    = Path("artifacts/models"); MODEL_DIR.mkdir(parents=True, exist_ok=True)
 TARGET       = "load_kw"
 
 # -----------------------------------------------------------------------------
