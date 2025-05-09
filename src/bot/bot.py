@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Telegram‑бот  /optimize  (з автоматичним підкачуванням forecast погоди)
+Telegram‑бот  /optimize  – повертає 2 часи перемикань
+з урахуванням прогнозу погоди.
 """
 
 import os, sys, logging
+import pandas as pd
 from pathlib import Path
 from datetime import datetime
 from telegram import Update
@@ -39,14 +41,17 @@ async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE):
 async def cmd_optimize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date_str = context.args[0] if context.args else datetime.now().strftime("%Y-%m-%d")
 
-    # гарантуємо наявність weather‑forecast
-    forecast_fp = Path(f"data/weather/forecast_hourly_{date_str}.csv")
-    if not forecast_fp.exists():
+    # forecast погоди
+    fp = Path(f"data/weather/forecast_hourly_{date_str}.csv")
+    if not fp.exists():
         try:
             fetch_forecast(date_str)
         except Exception as e:
             log.exception(e)
             return await update.message.reply_text(f"❌ Не вдалося отримати прогноз погоди\n{e}")
+
+    df_weather = pd.read_csv(fp)
+    df_weather["timestamp"] = pd.to_datetime(df_weather["timestamp"], utc=True)
 
     # прогноз PV/Load
     try:
@@ -56,7 +61,9 @@ async def cmd_optimize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text(f"❌ Не вдалося побудувати прогноз\n{e}")
 
     # оптимізація
-    t_night, t_even, soc_end, imp = optimize_schedule(df_pred)
+    weather = pd.read_csv(f"data/weather/forecast_hourly_{date_str}.csv")
+    t_night, t_even, soc_end, imp = optimize_schedule(df_pred, weather)
+
     total_gen  = df_pred["pv_kw"].sum()
     total_load = df_pred["load_kw"].sum()
 
@@ -64,10 +71,9 @@ async def cmd_optimize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⚙️ Оптимізація для {date_str}:\n\n"
         f"🌙 Нічне перемикання: {t_night}\n"
         f"🌇 Вечірнє перемикання: {t_even}\n\n"
-        f"🔋 Генерація: {total_gen:.2f} kWh\n"
-        f"⚡️ Споживання: {total_load:.2f} kWh\n"
-        f"🌐 Імпорт: {imp:.2f} kWh\n"
-        f"✅ Кінцевий SOC: {soc_end:.1f} %"
+        f"🔋 Генерація: {total_gen:.2f}kWh\n"
+        f"⚡️ Споживання: {total_load:.2f}kWh\n"
+
     )
 
 # ── main ──────────────────────────────────────────────────────────────
