@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
 from pathlib import Path
 import pickle, pandas as pd
 from xgboost import XGBRegressor
