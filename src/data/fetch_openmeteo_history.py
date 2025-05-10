@@ -1,23 +1,16 @@
-"""
-Завантажує історичні погодинні + денні дані Open-Meteo
-(Львів, останні 100 днів) і зберігає у data/weather/.
-"""
-
 import openmeteo_requests, requests_cache, pandas as pd
 from retry_requests import retry
 from datetime import date, timedelta
 import os, pathlib
 
-# → Локація
+
 LAT, LON = 49.8397, 24.0297
-# → Діапазон: ще на день раніше, щоб не було «висячих» годин
 END_DATE   = date(2025, 5, 7)
 START_DATE = END_DATE - timedelta(days=100)
 
 OUT_DIR = pathlib.Path("data/weather")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# ↘️ клієнт із кешем + retry
 cache = requests_cache.CachedSession(".cache", expire_after=3600)
 session = retry(cache, retries=5, backoff_factor=0.2)
 om     = openmeteo_requests.Client(session=session)
@@ -29,13 +22,13 @@ params = {
     "start_date": "2025-01-30",
     "end_date":  "2025-04-30",
     "timezone":   "auto",
-    # --- погодинні фічі (додали shortwave_radiation) ---
+
     "hourly": [
         "temperature_2m", "relative_humidity_2m", "apparent_temperature",
         "precipitation_probability", "cloud_cover", "wind_speed_10m",
         "shortwave_radiation"
     ],
-    # --- денні (додали sunrise / sunset / weather_code) ---
+
     "daily": [
         "sunrise", "sunset", "daylight_duration",
         "uv_index_max", "shortwave_radiation_sum",
@@ -45,7 +38,6 @@ params = {
 
 response = om.weather_api(url, params=params)[0]
 
-# ----------  Hourly ----------
 h = response.Hourly()
 hourly_df = pd.DataFrame({
     "time": pd.date_range(
@@ -65,7 +57,6 @@ hourly_df = pd.DataFrame({
 hourly_fp = OUT_DIR / f"history_hourly_{START_DATE}_to_{END_DATE}.csv"
 hourly_df.to_csv(hourly_fp, index=False)
 
-# ----------  Daily ----------
 d = response.Daily()
 daily_df = pd.DataFrame({
     "date": pd.date_range(
@@ -87,6 +78,5 @@ daily_df.to_csv(daily_fp, index=False)
 print(f"[✅] Saved:\n • {hourly_fp}\n • {daily_fp}")
 
 def main():
-    """Щоб import … as main не падав, якщо ви захочете повернути погоду."""
     pass
 
