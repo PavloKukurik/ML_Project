@@ -1,10 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-Telegram‑бот  /optimize  – повертає 2 часи перемикань
-з урахуванням прогнозу погоди.
-"""
-
 import os, sys, logging
 import pandas as pd
 from pathlib import Path
@@ -13,13 +6,11 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from dotenv import load_dotenv
 
-# ── TOKEN ─────────────────────────────────────────────────────────────
 load_dotenv(Path(__file__).parents[2] / ".env")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN missing")
 
-# ── local imports ─────────────────────────────────────────────────────
 ROOT = Path(__file__).parents[1].resolve()
 sys.path.append(str(ROOT))
 
@@ -30,7 +21,6 @@ from data.get_openmeteo_forecast     import fetch_forecast
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-# ── handlers ──────────────────────────────────────────────────────────
 async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привіт! Я бот‑оптимізатор батареї.\n"
@@ -41,7 +31,6 @@ async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE):
 async def cmd_optimize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date_str = context.args[0] if context.args else datetime.now().strftime("%Y-%m-%d")
 
-    # forecast погоди
     fp = Path(f"data/weather/forecast_hourly_{date_str}.csv")
     if not fp.exists():
         try:
@@ -53,14 +42,12 @@ async def cmd_optimize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     df_weather = pd.read_csv(fp)
     df_weather["timestamp"] = pd.to_datetime(df_weather["timestamp"], utc=True)
 
-    # прогноз PV/Load
     try:
         df_pred = predict_day(date_str)
     except Exception as e:
         log.exception(e)
         return await update.message.reply_text(f"❌ Не вдалося побудувати прогноз\n{e}")
 
-    # оптимізація
     weather = pd.read_csv(f"data/weather/forecast_hourly_{date_str}.csv")
     t_night, t_even, soc_end, imp = optimize_schedule(df_pred, weather)
 
@@ -76,7 +63,6 @@ async def cmd_optimize(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     )
 
-# ── main ──────────────────────────────────────────────────────────────
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start",    cmd_start))
