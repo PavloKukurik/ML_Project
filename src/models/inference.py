@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
 from pathlib import Path
 from datetime import datetime, timedelta
 import math, pickle, pandas as pd, numpy as np
@@ -41,7 +39,7 @@ def predict_day(date_str: str) -> pd.DataFrame:
 
     hr = (df.set_index("timestamp")
             .resample("1h").mean()
-            .dropna(subset=["load_kw", "pv_kw"])   # <-- fix
+            .dropna(subset=["load_kw", "pv_kw"])
             .reset_index())
 
     start = pd.Timestamp(datetime.strptime(date_str, "%Y-%m-%d"),
