@@ -26,33 +26,28 @@ def go_to_previous_day(driver, wait):
             By.CSS_SELECTOR,
             "div.iconarrow-l.fsUsePar"
         )))
-        # JS-клік, щоб уникнути 'not clickable'
         driver.execute_script("arguments[0].click();", prev_btn)
         print("  ✔ Clicked previous-day arrow")
-        time.sleep(5)  # чекаємо, поки підвантажаться дані
+        time.sleep(5) 
     except Exception as e:
         print(f"  ✖ Failed to click previous-day arrow: {e}")
 
 def download_data(driver, inverter_url: str, download_dir: str, days: int):
     wait = WebDriverWait(driver, 20)
-
-    # Відкриваємо сторінку інвертора
     driver.get(inverter_url)
     time.sleep(5)
 
     for i in range(days):
         print(f"Day {i+1}/{days} — exporting...")
 
-        # 1) Експорт даних
         try:
             export_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button.export-btn")))
             export_btn.click()
             print("  ✔ Export clicked")
-            time.sleep(8)  # чекаємо, коли файл зкачається
+            time.sleep(8)
         except Exception as e:
             print(f"  ✖ Export failed: {e}")
 
-        # 2) Перемикаємо попередній день
         go_to_previous_day(driver, wait)
 
 def main():
@@ -61,7 +56,7 @@ def main():
     os.makedirs(download_dir, exist_ok=True)
 
     inverter_url = "https://www.deyecloud.com/station/device?id=61156646&hasSetPrice=false"
-    days_to_download = 180  # останні 6 місяців
+    days_to_download = 180
 
     driver = init_driver(download_dir)
     try:
