@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+
 from typing import Tuple
 import numpy as np, pandas as pd
 from .battery_simulator import simulate_soc
@@ -24,7 +23,7 @@ def optimize_schedule(df_pred: pd.DataFrame,
                       df_weather: pd.DataFrame) -> Tuple[str,str,float,float]:
     t_even = _evening(df_weather)
     best = None
-    for q in range(0, 25):          # 0…6 год, крок 15 хв
+    for q in range(0, 25):     
         t_n = q * 0.25
         sim = simulate_soc(df_pred, t_n, t_even)
         imp   = sim["grid_import_kw"].sum()
