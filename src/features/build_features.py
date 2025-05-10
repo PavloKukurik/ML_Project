@@ -1,14 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-build_features.py  – формує data/processed/features_daily.csv
-
-• читає clean_daily.csv (інвертор), history_hourly_*weather
-• агрегує 5‑хв → 1‑год
-• перетворює середню потужність на kWh
-• asof‑merge з погодою, додає time‑фічі
-"""
-
 from pathlib import Path
 import glob, math, pandas as pd, numpy as np
 
@@ -18,7 +7,6 @@ OUT_CSV  = PROC_DIR / "features_daily.csv"
 
 INV_FILE = PROC_DIR / "clean_daily.csv"
 
-# ── інвертор ──────────────────────────────────────────────────────────
 inv = pd.read_csv(INV_FILE)
 inv["timestamp"] = pd.to_datetime(inv["timestamp"], utc=True, errors="coerce")
 inv = inv.dropna(subset=["timestamp"])
@@ -28,15 +16,13 @@ inv["timestamp"] = inv["timestamp"].dt.tz_convert("Europe/Kyiv")
 
 inv = (inv.set_index("timestamp")
           .resample("1h")
-          .mean()                   # середня потужність кВт
+          .mean()                 
           .dropna(subset=["load_kw","pv_kw"])
           .reset_index())
 
-# → кВт·год (1 год * kВт)
 inv["load_kw"] *= 1.0
 inv["pv_kw"]   *= 1.0
 
-# ── погода ────────────────────────────────────────────────────────────
 weather_files = glob.glob(str(WEATH_DIR / "history_hourly_*.csv"))
 weather = (pd.concat((pd.read_csv(f) for f in weather_files), ignore_index=True)
              .rename(columns={"time": "timestamp"}))
@@ -50,12 +36,11 @@ weather = weather.rename(columns={
     "shortwave_radiation": "w_swr"
 })[["timestamp","w_temp","w_cloud","w_swr"]]
 
-# ── merge_asof ≤30 хв ─────────────────────────────────────────────────
+
 df = pd.merge_asof(inv.sort_values("timestamp"),
                    weather, on="timestamp",
                    tolerance=pd.Timedelta("30min"))
 
-# ── time‑фічі ─────────────────────────────────────────────────────────
 ts = df["timestamp"].dt
 df["hour"]      = ts.hour
 df["dow"]       = ts.dayofweek
